@@ -9,7 +9,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Svg, { Path, Rect, Ellipse, Circle, Line } from "react-native-svg";
-import { Audio } from "expo-av";
+import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
 
 // --- Global Constants ---
 const THORN_WIDTH = 80;
@@ -60,16 +60,11 @@ interface ThornData {
   passed: boolean;
 }
 
-// --- Sound URLs ---
-// Using remote public domain sounds for instant playback.
-// For production, replace these with: require('./assets/your-sound.mp3')
-const SOUNDS = {
-  dive: { uri: "https://actions.google.com/sounds/v1/water/water_splash.ogg" },
-  score: {
-    uri: "https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg",
-  },
-  crash: { uri: "https://actions.google.com/sounds/v1/impacts/crash.ogg" },
-};
+// --- Sound Sources ---
+// Preloading the files for use in the audio players
+const diveAudioSource = require("./assets/sounds/dive.wav");
+const scoreAudioSource = require("./assets/sounds/score.wav");
+const crashAudioSource = require("./assets/sounds/crash.wav");
 
 export default function App() {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -94,42 +89,40 @@ export default function App() {
 
   const currentConfig = LEVEL_CONFIGS[level];
 
-  // --- Audio Configuration & Playback ---
+  // --- Audio Configuration & Playback (Using expo-audio) ---
+  const divePlayer = useAudioPlayer(diveAudioSource);
+  const scorePlayer = useAudioPlayer(scoreAudioSource);
+  const crashPlayer = useAudioPlayer(crashAudioSource);
+
   useEffect(() => {
     // Configure audio to play even if the physical switch is on silent (iOS)
-    Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      shouldDuckAndroid: true,
-    });
+    // and correctly handle background volume reduction (ducking)
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      interruptionMode: "duckOthers",
+    }).catch((err) => console.warn("Could not set audio mode:", err));
   }, []);
-
-  const playSound = async (source: any) => {
-    try {
-      const { sound } = await Audio.Sound.createAsync(source);
-      await sound.playAsync();
-      // Unload sound from memory once it finishes playing
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync();
-        }
-      });
-    } catch (error) {
-      console.warn("Could not play sound:", error);
-    }
-  };
 
   const playDiveSound = useCallback(() => {
-    playSound(SOUNDS.dive);
-  }, []);
+    if (divePlayer) {
+      divePlayer.seekTo(0);
+      divePlayer.play();
+    }
+  }, [divePlayer]);
 
   const playScoreSound = useCallback(() => {
-    playSound(SOUNDS.score);
-  }, []);
+    if (scorePlayer) {
+      scorePlayer.seekTo(0);
+      scorePlayer.play();
+    }
+  }, [scorePlayer]);
 
   const playCrashSound = useCallback(() => {
-    playSound(SOUNDS.crash);
-  }, []);
+    if (crashPlayer) {
+      crashPlayer.seekTo(0);
+      crashPlayer.play();
+    }
+  }, [crashPlayer]);
 
   // --- Unified Game Loop ---
   useEffect(() => {
