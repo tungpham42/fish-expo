@@ -7,9 +7,23 @@ import {
   TouchableWithoutFeedback,
   ViewStyle,
   useWindowDimensions,
+  AppState,
 } from "react-native";
 import Svg, { Path, Rect, Ellipse, Circle, Line } from "react-native-svg";
 import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
+import {
+  InterstitialAd,
+  AdEventType,
+  TestIds,
+} from "react-native-google-mobile-ads";
+
+// --- AdMob Initialization ---
+const adUnitId = __DEV__
+  ? TestIds.INTERSTITIAL
+  : "ca-app-pub-3585118770961536/3304296708";
+const interstitial = InterstitialAd.createForAdRequest(adUnitId, {
+  keywords: ["game", "arcade", "fish"],
+});
 
 // --- Global Constants ---
 const THORN_WIDTH = 80;
@@ -61,7 +75,6 @@ interface ThornData {
 }
 
 // --- Sound Sources ---
-// Preloading the files for use in the audio players
 const diveAudioSource = require("./assets/sounds/dive.wav");
 const scoreAudioSource = require("./assets/sounds/score.wav");
 const crashAudioSource = require("./assets/sounds/crash.wav");
@@ -73,7 +86,11 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>("MENU");
   const [level, setLevel] = useState<Level>("Medium");
 
-  // Game Engine Logic
+  // --- AdRefs ---
+  const gamesPlayedRef = useRef<number>(0);
+  const isAdLoadedRef = useRef<boolean>(false);
+
+  // --- Game Engine Logic Refs ---
   const fishPosRef = useRef<number>(windowHeight / 2);
   const fishVelocityRef = useRef<number>(0);
   const thornsRef = useRef<ThornData[]>([]);
@@ -89,14 +106,12 @@ export default function App() {
 
   const currentConfig = LEVEL_CONFIGS[level];
 
-  // --- Audio Configuration & Playback (Using expo-audio) ---
+  // --- Audio Configuration & Playback ---
   const divePlayer = useAudioPlayer(diveAudioSource);
   const scorePlayer = useAudioPlayer(scoreAudioSource);
   const crashPlayer = useAudioPlayer(crashAudioSource);
 
   useEffect(() => {
-    // Configure audio to play even if the physical switch is on silent (iOS)
-    // and correctly handle background volume reduction (ducking)
     setAudioModeAsync({
       playsInSilentMode: true,
       interruptionMode: "duckOthers",
@@ -124,12 +139,57 @@ export default function App() {
     }
   }, [crashPlayer]);
 
+  // --- AdMob Lifecycle Effect ---
+  useEffect(() => {
+    const unsubscribeLoaded = interstitial.addAdEventListener(
+      AdEventType.LOADED,
+      () => {
+        isAdLoadedRef.current = true;
+      },
+    );
+
+    const unsubscribeClosed = interstitial.addAdEventListener(
+      AdEventType.CLOSED,
+      () => {
+        isAdLoadedRef.current = false;
+        interstitial.load();
+      },
+    );
+
+    interstitial.load();
+
+    return () => {
+      unsubscribeLoaded();
+      unsubscribeClosed();
+    };
+  }, []);
+
+  // --- App State (Background) Listener ---
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      // If the app goes to the background/inactive state while playing, pause/reset
+      if (
+        nextAppState.match(/inactive|background/) &&
+        gameState === "PLAYING"
+      ) {
+        setGameState("MENU");
+        // Reset positions safely
+        fishPosRef.current = size.height / 2;
+        thornsRef.current = [];
+        scoreRef.current = 0;
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [gameState, size.height]);
+
   // --- Unified Game Loop ---
   useEffect(() => {
     if (gameState !== "PLAYING") return;
 
     const updateLoop = (currentTime: number) => {
-      // Initialize timers on the first frame using requestAnimationFrame's currentTime
       if (lastTimeRef.current === 0) {
         lastTimeRef.current = currentTime;
         lastThornSpawnRef.current = currentTime;
@@ -226,6 +286,19 @@ export default function App() {
       if (isGameOver) {
         playCrashSound();
         setGameState("GAME_OVER");
+
+        // --- AdMob Trigger Logic ---
+        gamesPlayedRef.current += 1;
+
+        if (gamesPlayedRef.current >= 3 && isAdLoadedRef.current) {
+          try {
+            interstitial.show();
+            gamesPlayedRef.current = 0; // Reset counter
+          } catch (error) {
+            console.log("Failed to show ad:", error);
+          }
+        }
+
         return;
       }
 
@@ -252,7 +325,6 @@ export default function App() {
     thornsRef.current = [];
     scoreRef.current = 0;
 
-    // Reset timers to 0 so requestAnimationFrame initializes them properly
     lastThornSpawnRef.current = 0;
     lastTimeRef.current = 0;
 
